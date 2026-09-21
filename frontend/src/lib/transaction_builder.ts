@@ -16,6 +16,7 @@ import {
   TransactionBuilder,
   BASE_FEE,
   nativeToScVal,
+  scValToNative,
   Address,
   xdr,
 } from '@stellar/stellar-sdk';
@@ -44,10 +45,23 @@ export interface SubscribeResult {
   txHash: string;
 }
 
+/** Contract event displayed in the frontend history table */
+export interface ContractEventRecord {
+  id: string;
+  type: 'created' | 'renewed' | 'cancelled' | 'expired' | 'unknown';
+  rawType: string;
+  timestamp: string;
+  ledger: number;
+  subscriber: string;
+  amount: string;
+  pagingToken?: string;
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = 1_000;
 const MAX_POLL_ATTEMPTS = 60; // 60 seconds total
+const DEFAULT_EVENT_LIMIT = 100;
 
 // ── Main function ─────────────────────────────────────────────────────────────
 
@@ -122,6 +136,38 @@ export async function buildAndSubmitSubscribe(
   return { txHash };
 }
 
+/**
+ * Fetch lifecycle events emitted by the subscription contract.
+ *
+ * The current contract emits `subscribe` and `executed` events. The UI maps
+ * those to the issue's lifecycle names (`created` and `renewed`) while still
+ * supporting future `cancelled` and `expired` event names if the contract adds
+ * them later.
+ */
+export async function fetchContractEvents(
+  contractId: string,
+  rpcUrl: string,
+  startLedger: number,
+  limit = DEFAULT_EVENT_LIMIT,
+  cursor?: string
+): Promise<ContractEventRecord[]> {
+  if (!contractId) {
+    return [];
+  }
+
+  const server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+  const response = await server.getEvents({
+    startLedger,
+    filters: [{ type: 'contract', contractIds: [contractId] }],
+    limit,
+    cursor,
+  });
+
+  return response.events.map((event, index) =>
+    toContractEventRecord(event, index)
+  );
+}
+
 // ── Polling helper ────────────────────────────────────────────────────────────
 
 async function pollForConfirmation(
@@ -154,4 +200,79 @@ async function pollForConfirmation(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toContractEventRecord(
+  event: SorobanRpc.Api.EventResponse,
+  index: number
+): ContractEventRecord {
+  const rawType = readTopic(event.topic[0]);
+  const subscriber = readTopic(event.topic[1]);
+  const amount = readValue(event.value);
+
+  return {
+    id: event.id ?? `${event.ledger}-${index}`,
+    type: normalizeEventType(rawType),
+    rawType,
+    timestamp: event.ledgerClosedAt ?? 'Unknown',
+    ledger: event.ledger,
+    subscriber,
+    amount,
+    pagingToken: event.pagingToken,
+  };
+}
+
+function normalizeEventType(rawType: string): ContractEventRecord['type'] {
+  const normalized = rawType.toLowerCase();
+
+  if (normalized === 'subscribe' || normalized === 'created') {
+    return 'created';
+  }
+
+  if (normalized === 'executed' || normalized === 'renewed') {
+    return 'renewed';
+  }
+
+  if (normalized === 'cancel' || normalized === 'cancelled') {
+    return 'cancelled';
+  }
+
+  if (normalized === 'expire' || normalized === 'expired') {
+    return 'expired';
+  }
+
+  return 'unknown';
+}
+
+function readTopic(value?: xdr.ScVal): string {
+  if (!value) {
+    return 'Unknown';
+  }
+
+  return readNative(value);
+}
+
+function readValue(value: xdr.ScVal): string {
+  return readNative(value);
+}
+
+function readNative(value: xdr.ScVal): string {
+  try {
+    const native = scValToNative(value);
+    if (typeof native === 'bigint') {
+      return native.toString();
+    }
+
+    if (typeof native === 'string' || typeof native === 'number') {
+      return String(native);
+    }
+
+    if (native && typeof native === 'object' && 'toString' in native) {
+      return String(native);
+    }
+
+    return JSON.stringify(native);
+  } catch {
+    return value.toXDR('base64');
+  }
 }
