@@ -12,7 +12,6 @@ import {
   isAllowed,
   setAllowed,
   requestAccess,
-  getPublicKey,
   signTransaction,
 } from '@stellar/freighter-api';
 
@@ -65,16 +64,11 @@ export async function connectWallet(): Promise<string> {
     throw new Error(`Access was denied: ${access.error}`);
   }
 
-  // Retrieve the public key from the current session response
-  const keyResult = await getPublicKey();
-  if (keyResult.error) {
-    throw new Error(`Could not retrieve public key: ${keyResult.error}`);
-  }
-  if (!keyResult.publicKey) {
+  if (!access.address) {
     throw new Error('Freighter returned an empty public key.');
   }
 
-  return keyResult.publicKey;
+  return access.address;
 }
 
 // ─── Transaction signing ──────────────────────────────────────────────────────
