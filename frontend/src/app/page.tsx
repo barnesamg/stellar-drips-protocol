@@ -8,6 +8,7 @@
  */
 
 import SubscriptionForm from '@/components/SubscriptionForm';
+import EventHistory from '@/components/EventHistory';
 import { useWallet } from '@/hooks/useWallet';
 
 export default function Home() {
@@ -104,6 +105,8 @@ export default function Home() {
           Connect your wallet above to create a subscription.
         </div>
       )}
+
+      <EventHistory />
     </main>
   );
 }
